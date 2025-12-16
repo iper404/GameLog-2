@@ -50,6 +50,21 @@ class GameUpdate(BaseModel):
     # Optional status changes
     status: Optional[str] = None
 
+    estimated_hours: Optional[float] = None
+    cover_art_url: Optional[str] = None  # optional, but handy
+    title: Optional[str] = None          # optional, but handy
+    platform: Optional[str] = None       # optional, but handy
+
+
+class GameCreate(BaseModel):
+    title: str
+    platform: str
+    cover_art_url: Optional[str] = None
+
+    # optional inputs with sensible defaults
+    status: str = "backlog"
+    hours_played: float = 0
+    estimated_hours: float = 40
 
 def recalc_completion(game: Game) -> None:
     """Recalculate completion_percent based on hours_played / estimated_hours."""
@@ -76,6 +91,12 @@ def set_current_game(game_id: int) -> Game:
     target.last_now_playing_at = datetime.now(timezone.utc)
 
     return target
+
+def next_game_id() -> int:
+    if not GAMES:
+        return 1
+    return max(g.id for g in GAMES) + 1
+
 
 
 
@@ -167,6 +188,63 @@ def update_game(game_id: int, update: GameUpdate):
     if update.status is not None:
         game.status = update.status
 
+    # Update estimated game length
+    if update.estimated_hours is not None:
+        if update.estimated_hours <= 0:
+            raise HTTPException(status_code=400, detail="estimated_hours must be > 0")
+        game.estimated_hours = update.estimated_hours
+
+    # Optional metadata edits
+    if update.cover_art_url is not None:
+        game.cover_art_url = update.cover_art_url
+
+    if update.title is not None:
+        game.title = update.title
+
+    if update.platform is not None:
+        game.platform = update.platform
+
+
     # Recompute completion after any hours change
     recalc_completion(game)
     return game
+
+@app.post("/games", response_model=Game)
+def create_game(payload: GameCreate):
+    new_game = Game(
+        id=next_game_id(),
+        title=payload.title,
+        platform=payload.platform,
+        status=payload.status,
+        hours_played=payload.hours_played,
+        estimated_hours=payload.estimated_hours,
+        cover_art_url=payload.cover_art_url,
+        is_current=False,
+        started_on=None,
+        last_now_playing_at=None,
+        completion_percent=0,
+    )
+
+    recalc_completion(new_game)
+    GAMES.append(new_game)
+    return new_game
+
+@app.delete("/games/{game_id}")
+def delete_game(game_id: int):
+    idx = next((i for i, g in enumerate(GAMES) if g.id == game_id), None)
+    if idx is None:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    was_current = GAMES[idx].is_current
+    del GAMES[idx]
+
+    # If we deleted the current game, pick a new one if any remain
+    if was_current and GAMES:
+        # choose the most recently "now playing" among remaining, else first game
+        candidate = max(
+            GAMES,
+            key=lambda g: g.last_now_playing_at.timestamp() if g.last_now_playing_at else 0
+        )
+        set_current_game(candidate.id)
+
+    return {"deleted": game_id}

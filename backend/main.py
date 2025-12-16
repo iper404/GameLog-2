@@ -101,7 +101,7 @@ GAMES: List[Game] = [
         status="backlog",
         hours_played=0,
         estimated_hours=200,
-        cover_art_url="https://upload.wikimedia.org/wikipedia/en/5/5d/FFXIV_ARR_Cover_Art.jpg",
+        cover_art_url="https://art.gametdb.com/ps3/coverHQ/US/BLUS30611.jpg?1404335232",
     ),
     Game(
         id=3,
@@ -110,7 +110,7 @@ GAMES: List[Game] = [
         status="backlog",
         hours_played=0,
         estimated_hours=70,
-        cover_art_url="https://upload.wikimedia.org/wikipedia/en/2/21/Persona_3_Reload_cover.jpg",
+        cover_art_url="https://art.gametdb.com/switch/coverHQ/US/A4TPA.jpg?1712259737",
     ),
 ]
 

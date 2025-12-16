@@ -24,3 +24,10 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* If the viewport is short, hide the backlog footer so "Now Playing" always wins */
+@media (max-height: 720px) {
+  .hide-backlog-on-short {
+    display: none !important;
+  }
+}

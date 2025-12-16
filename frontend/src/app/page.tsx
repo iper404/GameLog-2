@@ -181,7 +181,7 @@ function Modal({
                 </button>
 
                 <div className="text-xs text-white/50">
-                  Completion % recalculates automatically.
+                  {/* Completion % recalculates automatically. */}
                 </div>
               </div>
             )}

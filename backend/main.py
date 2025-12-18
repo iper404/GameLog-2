@@ -13,14 +13,18 @@ from auth import get_user_id
 
 app = FastAPI()
 
-# CORS for your Next.js dev server
+import os
+
+origins = os.getenv("FRONTEND_ORIGINS", "http://localhost:3000").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=[o.strip() for o in origins],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 
 @app.on_event("startup")

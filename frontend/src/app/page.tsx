@@ -14,11 +14,22 @@ type Game = {
   completion_percent: number;
   cover_art_url: string | null;
   is_current: boolean;
-  last_now_playing_at: string | null; // backend returns ISO string
+  last_now_playing_at: string | null;
 };
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
-const HEADER_H = 64; // px
+const HEADER_H = 64;
+
+const PLATFORMS = [
+  "PC",
+  "PS5",
+  "PS4",
+  "Xbox Series X|S",
+  "Xbox One",
+  "Switch",
+  "Switch 2",
+  "Other",
+] as const;
 
 function ProgressBar({
   percent,
@@ -38,17 +49,40 @@ function ProgressBar({
   );
 }
 
-function Cover({ url, alt, className }: { url: string | null; alt: string; className: string }) {
-  if (!url) {
-    return (
-      <div
-        className={`${className} bg-zinc-800 border border-white/10 flex items-center justify-center`}
-      >
-        <span className="text-xs text-white/50">No cover</span>
-      </div>
-    );
-  }
-  return <img src={url} alt={alt} className={className} />;
+/**
+ * Cover component that ALWAYS preserves layout space.
+ * - If url exists: shows image
+ * - If no url: shows dark placeholder with "?" icon
+ */
+function Cover({
+  url,
+  alt,
+  className,
+  imgClassName = "object-cover",
+  style,
+}: {
+  url: string | null;
+  alt: string;
+  className: string;
+  imgClassName?: string;
+  style?: React.CSSProperties;
+}) {
+  return (
+    <div className={`relative overflow-hidden ${className}`} style={style}>
+
+      {url ? (
+        <img
+          src={url}
+          alt={alt}
+          className={`absolute inset-0 w-full h-full ${imgClassName}`}
+        />
+      ) : (
+        <div className="absolute inset-0 bg-zinc-800 border border-white/10 flex items-center justify-center">
+          <span className="text-3xl text-white/30 font-bold">?</span>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function Modal({
@@ -58,6 +92,7 @@ function Modal({
   onAddHours,
   loading,
   onSaveEdits,
+  onSaveMeta,
   onDelete,
 }: {
   game: Game;
@@ -66,20 +101,46 @@ function Modal({
   onAddHours: (hoursToAdd: number) => void;
   loading: boolean;
   onSaveEdits: (payload: { hours_played: number; estimated_hours: number }) => void;
+  onSaveMeta: (payload: { title: string; platform: string; cover_art_url: string | null }) => void;
   onDelete: () => void;
 }) {
   const [hours, setHours] = useState<string>("1");
+
+  // Edit progress / length
+  const [editOpen, setEditOpen] = useState(false);
   const [hoursPlayed, setHoursPlayed] = useState<string>(String(game.hours_played ?? 0));
   const [estimatedHours, setEstimatedHours] = useState<string>(String(game.estimated_hours ?? 40));
-  const [editOpen, setEditOpen] = useState(false);
 
-  // Keep state in sync if a different game is selected (safe + future-proof)
+  // Edit game info
+  const [metaOpen, setMetaOpen] = useState(false);
+  const [editTitle, setEditTitle] = useState<string>(game.title ?? "");
+  const [editPlatform, setEditPlatform] = useState<string>(game.platform ?? "PC");
+  const [editCoverArtUrl, setEditCoverArtUrl] = useState<string>(game.cover_art_url ?? "");
+
   useEffect(() => {
+    // Reset modal-local state whenever you open a different game
     setHours("1");
+
+    setEditOpen(false);
     setHoursPlayed(String(game.hours_played ?? 0));
     setEstimatedHours(String(game.estimated_hours ?? 40));
-    setEditOpen(false);
+
+    setMetaOpen(false);
+    setEditTitle(game.title ?? "");
+    setEditPlatform(game.platform ?? "PC");
+    setEditCoverArtUrl(game.cover_art_url ?? "");
   }, [game.id]);
+
+  const canSaveProgress =
+    !loading &&
+    !Number.isNaN(Number(hoursPlayed)) &&
+    Number(hoursPlayed) >= 0 &&
+    !Number.isNaN(Number(estimatedHours)) &&
+    Number(estimatedHours) > 0;
+
+  const titleOk = editTitle.trim().length > 0;
+  const platformOk = editPlatform.trim().length > 0;
+  const canSaveMeta = !loading && titleOk && platformOk;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -90,7 +151,7 @@ function Modal({
           <Cover
             url={game.cover_art_url}
             alt={`${game.title} cover`}
-            className="w-20 h-28 object-cover rounded-lg"
+            className="w-20 h-28 rounded-lg border border-white/10"
           />
           <div className="flex-1">
             <div className="text-lg font-bold">{game.title}</div>
@@ -133,7 +194,7 @@ function Modal({
             </div>
           </div>
 
-          {/* Collapsible edit section */}
+          {/* Collapsible: Edit progress/length */}
           <div className="rounded-xl border border-white/10">
             <button
               type="button"
@@ -172,13 +233,7 @@ function Modal({
 
                 <button
                   className="w-full rounded-lg bg-blue-600 px-4 py-2 font-semibold disabled:opacity-50 cursor-pointer"
-                  disabled={
-                    loading ||
-                    Number.isNaN(Number(hoursPlayed)) ||
-                    Number(hoursPlayed) < 0 ||
-                    Number.isNaN(Number(estimatedHours)) ||
-                    Number(estimatedHours) <= 0
-                  }
+                  disabled={!canSaveProgress}
                   onClick={() =>
                     onSaveEdits({
                       hours_played: Number(hoursPlayed),
@@ -190,6 +245,74 @@ function Modal({
                 </button>
 
                 <div className="text-xs text-white/50">Completion % recalculates automatically.</div>
+              </div>
+            )}
+          </div>
+
+          {/* Collapsible: Edit game info (NEW) */}
+          <div className="rounded-xl border border-white/10">
+            <button
+              type="button"
+              className="w-full flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-white/5 rounded-xl"
+              onClick={() => setMetaOpen((v) => !v)}
+            >
+              <span className="text-sm font-semibold">Edit game info</span>
+              <span className="text-white/60 text-sm">{metaOpen ? "▲" : "▼"}</span>
+            </button>
+
+            {metaOpen && (
+              <div className="px-3 pb-3 pt-1 space-y-3">
+                <div>
+                  <label className="text-xs text-white/60">Game name</label>
+                  <input
+                    value={editTitle}
+                    onChange={(e) => setEditTitle(e.target.value)}
+                    className="mt-1 w-full rounded-lg bg-zinc-950 border border-white/10 px-3 py-2"
+                    placeholder="Game title"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs text-white/60">Platform</label>
+                  <select
+                    value={editPlatform}
+                    onChange={(e) => setEditPlatform(e.target.value)}
+                    className="mt-1 w-full rounded-lg bg-zinc-950 border border-white/10 px-3 py-2 cursor-pointer"
+                  >
+                    {PLATFORMS.map((p) => (
+                      <option key={p} value={p}>
+                        {p}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-xs text-white/60">Cover art URL</label>
+                  <input
+                    value={editCoverArtUrl}
+                    onChange={(e) => setEditCoverArtUrl(e.target.value)}
+                    className="mt-1 w-full rounded-lg bg-zinc-950 border border-white/10 px-3 py-2"
+                    placeholder="https://..."
+                  />
+                  <div className="text-[11px] text-white/45 mt-1">
+                    Leave blank to clear cover art.
+                  </div>
+                </div>
+
+                <button
+                  className="w-full rounded-lg bg-blue-600 px-4 py-2 font-semibold disabled:opacity-50 cursor-pointer"
+                  disabled={!canSaveMeta}
+                  onClick={() =>
+                    onSaveMeta({
+                      title: editTitle.trim(),
+                      platform: editPlatform,
+                      cover_art_url: editCoverArtUrl.trim() ? editCoverArtUrl.trim() : null,
+                    })
+                  }
+                >
+                  Save
+                </button>
               </div>
             )}
           </div>
@@ -233,7 +356,7 @@ function AddGameModal({
   loading: boolean;
 }) {
   const [title, setTitle] = useState("");
-  const [platform, setPlatform] = useState("PC");
+  const [platform, setPlatform] = useState<(typeof PLATFORMS)[number]>("PC");
   const [coverArtUrl, setCoverArtUrl] = useState("");
   const [estimatedHours, setEstimatedHours] = useState("40");
 
@@ -243,11 +366,10 @@ function AddGameModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/70" onClick={onClose} />
+
       <div className="relative w-full max-w-md rounded-2xl bg-zinc-900 border border-white/10 p-4">
         <div className="text-lg font-bold">Add Game</div>
-        <div className="text-sm text-white/60 mt-1">
-          Add a game to your backlog (you can set it as Now Playing later).
-        </div>
+        <div className="text-sm text-white/60 mt-1">Add a game to your backlog.</div>
 
         <div className="mt-4 space-y-3">
           <div>
@@ -265,14 +387,13 @@ function AddGameModal({
             <select
               className="mt-1 w-full rounded-lg bg-zinc-950 border border-white/10 px-3 py-2 cursor-pointer"
               value={platform}
-              onChange={(e) => setPlatform(e.target.value)}
+              onChange={(e) => setPlatform(e.target.value as any)}
             >
-              <option>PC</option>
-              <option>PS5</option>
-              <option>PS4</option>
-              <option>Xbox Series X</option>
-              <option>Xbox One</option>
-              <option>Switch</option>
+              {PLATFORMS.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
             </select>
           </div>
 
@@ -339,7 +460,7 @@ export default function Home() {
 
   const token = session?.access_token ?? null;
 
-  // --- Auth bootstrap ---
+  // Auth bootstrap
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session ?? null);
@@ -354,57 +475,47 @@ export default function Home() {
     return () => sub.subscription.unsubscribe();
   }, []);
 
-  // --- Helper: build auth headers ---
-  const authHeaders = useCallback(
-    (extra: Record<string, string> = {}) => {
-      if (!token) return extra;
-      return { ...extra, Authorization: `Bearer ${token}` };
-    },
-    [token]
-  );
-
-  // --- Helper: fetch that throws on non-OK and returns JSON when present ---
   const apiJson = useCallback(
     async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
       if (!token) throw new Error("Not authenticated");
 
-      const url = path.startsWith("http") ? path : `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
+      const url = path.startsWith("http")
+        ? path
+        : `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
+
+      const headers = new Headers(init.headers);
+      headers.set("Authorization", `Bearer ${token}`);
 
       const res = await fetch(url, {
         ...init,
-        headers: authHeaders((init.headers as Record<string, string>) ?? {}),
+        headers,
         cache: init.cache ?? "no-store",
       });
 
       if (!res.ok) {
         const text = await res.text().catch(() => "");
-        throw new Error(`${res.status} ${res.statusText}${text ? ` — ${text}` : ""}`);
+        throw new Error(`${res.status} ${res.statusText} — ${text}`);
       }
 
-      // Some endpoints may return empty bodies; safe-guard:
       const contentType = res.headers.get("content-type") ?? "";
       if (!contentType.includes("application/json")) {
-        // @ts-expect-error allow void-ish responses
+        // @ts-expect-error allow void-ish
         return undefined;
       }
       return (await res.json()) as T;
     },
-    [authHeaders, token]
+    [token]
   );
 
   const refresh = useCallback(async () => {
     if (!token) return;
-
     try {
       const data = await apiJson<unknown>("/games");
-
-      // Critical safety: only set arrays into games state
       if (!Array.isArray(data)) {
         console.error("GET /games expected array, got:", data);
         setGames([]);
         return;
       }
-
       setGames(data as Game[]);
     } catch (e) {
       console.error("refresh failed:", e);
@@ -412,7 +523,6 @@ export default function Home() {
     }
   }, [apiJson, token]);
 
-  // Fetch games when token becomes available; clear on logout
   useEffect(() => {
     if (!token) {
       setGames([]);
@@ -421,7 +531,7 @@ export default function Home() {
     refresh();
   }, [token, refresh]);
 
-  // --- CRUD ---
+  // CRUD
   async function createGame(payload: {
     title: string;
     platform: string;
@@ -432,7 +542,7 @@ export default function Home() {
     try {
       await apiJson("/games", {
         method: "POST",
-        headers: authHeaders({ "Content-Type": "application/json" }),
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           title: payload.title,
           platform: payload.platform,
@@ -441,7 +551,6 @@ export default function Home() {
           status: "backlog",
         }),
       });
-
       await refresh();
       setAddOpen(false);
     } catch (e: any) {
@@ -456,7 +565,7 @@ export default function Home() {
     try {
       await apiJson(`/games/${game.id}`, {
         method: "PATCH",
-        headers: authHeaders({ "Content-Type": "application/json" }),
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ is_current: true }),
       });
       await refresh();
@@ -473,7 +582,7 @@ export default function Home() {
     try {
       await apiJson(`/games/${game.id}`, {
         method: "PATCH",
-        headers: authHeaders({ "Content-Type": "application/json" }),
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ add_hours: hoursToAdd }),
       });
       await refresh();
@@ -489,7 +598,24 @@ export default function Home() {
     try {
       await apiJson(`/games/${game.id}`, {
         method: "PATCH",
-        headers: authHeaders({ "Content-Type": "application/json" }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      await refresh();
+      setSelected(null);
+    } catch (e: any) {
+      alert(`Save failed: ${e?.message ?? e}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function saveMeta(game: Game, payload: { title: string; platform: string; cover_art_url: string | null }) {
+    setLoading(true);
+    try {
+      await apiJson(`/games/${game.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
       await refresh();
@@ -514,11 +640,29 @@ export default function Home() {
     }
   }
 
-  // --- Auth actions ---
+  // Auth actions
   async function signUp() {
-    const { error } = await supabase.auth.signUp({ email, password });
-    if (error) alert(error.message);
-    else alert("Check your email to confirm your account (if confirmations are enabled).");
+    // basic client-side validation (still rely on Supabase server validation too)
+    if (!email.trim()) return alert("Email required.");
+    if (password.length < 6) return alert("Password must be at least 6 characters.");
+
+    const { data, error } = await supabase.auth.signUp({ email, password });
+
+    if (error) {
+      // ex: weak password, invalid email
+      return alert(error.message);
+    }
+
+    // IMPORTANT: Supabase can return a user with empty identities when the email already exists
+    const identities = (data.user as any)?.identities;
+    if (data.user && Array.isArray(identities) && identities.length === 0) {
+      return alert("An account with this email already exists. Please sign in instead.");
+    }
+
+    // If email confirmation is enabled, session is typically null here
+    if (!data.session) {
+      alert("Check your email to confirm your account (if confirmations are enabled).");
+    }
   }
 
   async function signIn() {
@@ -532,7 +676,7 @@ export default function Home() {
     setGames([]);
   }
 
-  // --- Derived UI data ---
+  // Derived
   const currentGame = useMemo(() => games.find((g) => g.is_current) ?? null, [games]);
 
   const backlog = useMemo(() => {
@@ -544,7 +688,7 @@ export default function Home() {
     });
   }, [games]);
 
-  // --- Auth/loading screens ---
+  // Auth/loading screens
   if (authLoading) {
     return (
       <main className="min-h-screen bg-zinc-950 text-zinc-50 flex items-center justify-center p-6">
@@ -590,7 +734,7 @@ export default function Home() {
     );
   }
 
-  // --- Main app ---
+  // Main app
   return (
     <main className="min-h-screen bg-zinc-950 text-zinc-50">
       <header
@@ -598,12 +742,10 @@ export default function Home() {
         style={{ height: HEADER_H }}
       >
         <div className="h-full max-w-5xl mx-auto px-6 grid grid-cols-3 items-center">
-          {/* left: user */}
           <div className="justify-self-start text-xs text-white/60 truncate">
             {session.user.email ?? session.user.id}
           </div>
 
-          {/* center: title */}
           <button
             className="text-2xl font-bold cursor-pointer justify-self-center"
             onClick={() => window.location.reload()}
@@ -612,7 +754,6 @@ export default function Home() {
             GameLog
           </button>
 
-          {/* right: actions */}
           <div className="justify-self-end flex gap-2">
             <button
               className="rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold hover:bg-white/10 cursor-pointer disabled:opacity-50"
@@ -646,21 +787,16 @@ export default function Home() {
                   onClick={() => setSelected(currentGame)}
                   title="Click to manage this game"
                 >
+                  {/* Ensures consistent cover area even when no URL */}
                   <Cover
                     url={currentGame.cover_art_url}
                     alt={`${currentGame.title} cover`}
-                    className="w-full object-cover"
+                    className="w-full"
+                    imgClassName="object-cover"
+                    style={{ height: "clamp(260px, 52vh, 540px)" }}
                   />
 
-                  {/* If cover exists, enforce the responsive height; if not, the placeholder already has height */}
-                  {currentGame.cover_art_url && (
-                    <style jsx>{`
-                      img {
-                        height: clamp(260px, 52vh, 540px);
-                      }
-                    `}</style>
-                  )}
-
+                  {/* Overlay for readability */}
                   <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-black/90 via-black/70 to-transparent">
                     <div
                       className="text-xl font-bold"
@@ -705,7 +841,12 @@ export default function Home() {
                     onClick={() => setSelected(g)}
                     title="Click to manage"
                   >
-                    <Cover url={g.cover_art_url} alt={`${g.title} cover`} className="w-28 h-24 object-cover rounded-xl" />
+                    <Cover
+                      url={g.cover_art_url}
+                      alt={`${g.title} cover`}
+                      className="w-28 h-24 rounded-xl border border-white/10"
+                      imgClassName="object-cover"
+                    />
 
                     <div className="mt-1 text-xs text-white/80 line-clamp-2">{g.title}</div>
 
@@ -732,16 +873,13 @@ export default function Home() {
           onSetNowPlaying={() => setNowPlaying(selected)}
           onAddHours={(h) => addHours(selected, h)}
           onSaveEdits={(payload) => saveEdits(selected, payload)}
+          onSaveMeta={(payload) => saveMeta(selected, payload)}
           onDelete={() => deleteGame(selected)}
         />
       )}
 
       {addOpen && (
-        <AddGameModal
-          loading={loading}
-          onClose={() => setAddOpen(false)}
-          onCreate={createGame}
-        />
+        <AddGameModal loading={loading} onClose={() => setAddOpen(false)} onCreate={createGame} />
       )}
     </main>
   );

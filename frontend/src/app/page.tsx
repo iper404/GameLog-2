@@ -741,13 +741,14 @@ export default function Home() {
         className="sticky top-0 z-40 border-b border-white/10 bg-zinc-950/90 backdrop-blur"
         style={{ height: HEADER_H }}
       >
-        <div className="h-full max-w-5xl mx-auto px-6 grid grid-cols-3 items-center">
+        <div className="h-full max-w-5xl mx-auto px-4 sm:px-6 grid grid-cols-3 items-center">
+
           <div className="justify-self-start text-xs text-white/60 truncate">
             {session.user.email ?? session.user.id}
           </div>
 
           <button
-            className="text-2xl font-bold cursor-pointer justify-self-center"
+            className="text-xl sm:text-2xl font-bold cursor-pointer justify-self-center"
             onClick={() => window.location.reload()}
             title="Refresh"
           >
@@ -756,13 +757,16 @@ export default function Home() {
 
           <div className="justify-self-end flex gap-2">
             <button
-              className="rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold hover:bg-white/10 cursor-pointer disabled:opacity-50"
+              className="justify-self-end rounded-xl border border-white/10
+                        px-3 py-1.5 text-xs sm:px-4 sm:py-2 sm:text-sm
+                        font-semibold whitespace-nowrap hover:bg-white/10 cursor-pointer"
               onClick={() => setAddOpen(true)}
-              disabled={loading}
               title="Add a game"
             >
-              + Add Game
-            </button>
+              <span className="sm:hidden">+ Add</span>
+              <span className="hidden sm:inline">+ Add Game</span>
+          </button>
+
 
             <button
               className="rounded-xl border border-white/10 px-3 py-2 text-sm text-white/80 hover:bg-white/10 cursor-pointer"
@@ -827,17 +831,19 @@ export default function Home() {
           <div className="h-6" />
 
           {backlog.length > 0 && (
-            <div className="w-full hide-backlog-on-short">
+            <div className="w-full">
               <div className="text-center leading-tight">
                 <div className="font-semibold">Backlog Queue</div>
                 <div className="text-sm text-white/60 -mt-0.5">{backlog.length} games</div>
               </div>
 
-              <div className="mt-3 flex flex-wrap justify-center gap-4">
+              <div className="mt-3 flex gap-4 overflow-x-auto pb-2 w-full
+                justify-start sm:flex-wrap sm:justify-center sm:overflow-visible">
+
                 {backlog.map((g) => (
                   <button
                     key={g.id}
-                    className="w-28 cursor-pointer text-left flex flex-col rounded-xl"
+                    className="w-28 flex-none cursor-pointer text-left flex flex-col rounded-xl"
                     onClick={() => setSelected(g)}
                     title="Click to manage"
                   >

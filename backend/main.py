@@ -1,12 +1,19 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from datetime import datetime, timezone
 from typing import List, Optional
-from datetime import date, datetime, timezone
+
+from fastapi import FastAPI, Depends, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from sqlmodel import SQLModel, select, Session
+
+from db import engine, get_session
+from models import GameDB
+from schemas import GameCreate, GameUpdate, GameRead
+from auth import get_user_id
+
 
 app = FastAPI()
 
-# Allow the Next.js frontend to call the API from localhost:3000
+# CORS for your Next.js dev server
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
@@ -15,165 +22,148 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ----------------------------
-# Models
-# ----------------------------
-class Game(BaseModel):
-    id: int
-    title: str
-    platform: str
-    status: str  # "playing", "backlog", "completed"
-    hours_played: float = 0
 
-    # For computing completion automatically:
-    # Example: if estimated_hours=40 and hours_played=20 -> 50%
-    estimated_hours: float = 40
-
-    completion_percent: int = Field(0, ge=0, le=100)
-    cover_art_url: Optional[str] = None
-    is_current: bool = False
-    started_on: Optional[date] = None
-    last_now_playing_at: Optional[datetime] = None
+@app.on_event("startup")
+def on_startup():
+    # For now we auto-create tables. Later we’ll switch to Alembic migrations.
+    SQLModel.metadata.create_all(engine)
 
 
-
-class GameUpdate(BaseModel):
-    # Use add_hours for "I just played 2.5 hours"
-    add_hours: Optional[float] = None
-
-    # Or set an absolute value if you want later
-    hours_played: Optional[float] = None
-
-    # If true, make this the main "Now Playing" game
-    is_current: Optional[bool] = None
-
-    # Optional status changes
-    status: Optional[str] = None
-
-    estimated_hours: Optional[float] = None
-    cover_art_url: Optional[str] = None  # optional, but handy
-    title: Optional[str] = None          # optional, but handy
-    platform: Optional[str] = None       # optional, but handy
-
-
-class GameCreate(BaseModel):
-    title: str
-    platform: str
-    cover_art_url: Optional[str] = None
-
-    # optional inputs with sensible defaults
-    status: str = "backlog"
-    hours_played: float = 0
-    estimated_hours: float = 40
-
-def recalc_completion(game: Game) -> None:
-    """Recalculate completion_percent based on hours_played / estimated_hours."""
+def recalc_completion(game: GameDB) -> None:
+    """Compute completion_percent from hours_played / estimated_hours."""
     if game.estimated_hours <= 0:
         game.completion_percent = 0
         return
+    pct = round((game.hours_played / game.estimated_hours) * 100)
+    game.completion_percent = max(0, min(100, pct))
 
-    percent = round((game.hours_played / game.estimated_hours) * 100)
-    game.completion_percent = max(0, min(100, percent))
 
+def make_now_playing(session: Session, owner_id: str, game: GameDB) -> None:
+    """Ensure only ONE now-playing game per user."""
+    # unset current for this user
+    others = session.exec(
+        select(GameDB).where(GameDB.owner_id == owner_id, GameDB.is_current == True)
+    ).all()
 
-def set_current_game(game_id: int) -> Game:
-    target = next((g for g in GAMES if g.id == game_id), None)
-    if not target:
-        raise HTTPException(status_code=404, detail="Game not found")
-
-    for g in GAMES:
+    for g in others:
         g.is_current = False
+        g.updated_at = datetime.now(timezone.utc)
+        session.add(g)
 
-    target.is_current = True
-    target.status = "playing"
-
-    # Stamp recency (used for backlog ordering)
-    target.last_now_playing_at = datetime.now(timezone.utc)
-
-    return target
-
-def next_game_id() -> int:
-    if not GAMES:
-        return 1
-    return max(g.id for g in GAMES) + 1
-
-
-
-
-# ----------------------------
-# Temporary in-memory data
-# ----------------------------
-GAMES: List[Game] = [
-    Game(
-        id=1,
-        title="Elden Ring",
-        platform="PC",
-        status="playing",
-        hours_played=22,
-        estimated_hours=40,
-        cover_art_url="https://upload.wikimedia.org/wikipedia/en/b/b9/Elden_Ring_Box_art.jpg",
-        is_current=True,
-        last_now_playing_at=datetime.now(timezone.utc),
-    ),
-    Game(
-        id=2,
-        title="Final Fantasy XIV",
-        platform="PC",
-        status="backlog",
-        hours_played=0,
-        estimated_hours=200,
-        cover_art_url="https://art.gametdb.com/ps3/coverHQ/US/BLUS30611.jpg?1404335232",
-    ),
-    Game(
-        id=3,
-        title="Persona 3 Reload",
-        platform="PS5",
-        status="backlog",
-        hours_played=0,
-        estimated_hours=70,
-        cover_art_url="https://art.gametdb.com/switch/coverHQ/US/A4TPA.jpg?1712259737",
-    ),
-]
-
-# Initialize completion for all games on boot
-for g in GAMES:
-    recalc_completion(g)
+    # set target current
+    game.is_current = True
+    game.status = "playing"
+    game.last_now_playing_at = datetime.now(timezone.utc)
+    game.updated_at = datetime.now(timezone.utc)
+    session.add(game)
 
 
 @app.get("/health")
-def health_check():
+def health():
     return {"status": "ok"}
 
 
-@app.get("/games", response_model=List[Game])
-def get_games():
-    return GAMES
+# ✅ GET /games returns only your games
+@app.get("/games", response_model=List[GameRead])
+def get_games(
+    user_id: str = Depends(get_user_id),
+    session: Session = Depends(get_session),
+):
+    statement = (
+        select(GameDB)
+        .where(GameDB.owner_id == user_id)
+        .order_by(
+            GameDB.is_current.desc(),
+            GameDB.last_now_playing_at.desc().nullslast(),
+            GameDB.id.desc(),
+        )
+    )
+    games = session.exec(statement).all()
+    return games
 
 
-@app.get("/games/current", response_model=Game)
-def get_current_game():
-    current = next((g for g in GAMES if g.is_current), None)
-    if not current:
-        # fallback: pick first "playing" if none marked current
-        current = next((g for g in GAMES if g.status == "playing"), None)
+@app.get("/games/current", response_model=GameRead)
+def get_current_game(
+    user_id: str = Depends(get_user_id),
+    session: Session = Depends(get_session),
+):
+    current = session.exec(
+        select(GameDB).where(GameDB.owner_id == user_id, GameDB.is_current == True)
+    ).first()
 
-    if not current:
-        raise HTTPException(status_code=404, detail="No current game set")
+    if current:
+        return current
 
-    return current
+    # fallback: most recent last_now_playing
+    fallback = session.exec(
+        select(GameDB)
+        .where(GameDB.owner_id == user_id)
+        .order_by(GameDB.last_now_playing_at.desc().nullslast(), GameDB.id.desc())
+    ).first()
+
+    if not fallback:
+        raise HTTPException(status_code=404, detail="No games found for this user")
+
+    return fallback
 
 
-@app.patch("/games/{game_id}", response_model=Game)
-def update_game(game_id: int, update: GameUpdate):
-    game = next((g for g in GAMES if g.id == game_id), None)
+# ✅ POST /games creates under your user
+@app.post("/games", response_model=GameRead)
+def create_game(
+    payload: GameCreate,
+    user_id: str = Depends(get_user_id),
+    session: Session = Depends(get_session),
+):
+    game = GameDB(
+        owner_id=user_id,
+        title=payload.title,
+        platform=payload.platform,
+        status=payload.status,
+        cover_art_url=payload.cover_art_url,
+        hours_played=0,
+        estimated_hours=payload.estimated_hours,
+        completion_percent=0,
+        is_current=False,
+        last_now_playing_at=None,
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    recalc_completion(game)
+    session.add(game)
+    session.commit()
+    session.refresh(game)
+    return game
+
+
+# ✅ PATCH only works on your own games
+@app.patch("/games/{game_id}", response_model=GameRead)
+def update_game(
+    game_id: int,
+    update: GameUpdate,
+    user_id: str = Depends(get_user_id),
+    session: Session = Depends(get_session),
+):
+    game = session.exec(
+        select(GameDB).where(GameDB.id == game_id, GameDB.owner_id == user_id)
+    ).first()
+
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
 
-    # Set as now playing
-    if update.is_current is True:
-        game = set_current_game(game_id)
+    # metadata edits
+    if update.title is not None:
+        game.title = update.title
+    if update.platform is not None:
+        game.platform = update.platform
+    if update.cover_art_url is not None:
+        game.cover_art_url = update.cover_art_url
 
-    # Update hours
+    # status
+    if update.status is not None:
+        game.status = update.status
+
+    # hours changes
     if update.hours_played is not None:
         if update.hours_played < 0:
             raise HTTPException(status_code=400, detail="hours_played cannot be negative")
@@ -184,67 +174,55 @@ def update_game(game_id: int, update: GameUpdate):
             raise HTTPException(status_code=400, detail="add_hours cannot be negative")
         game.hours_played += update.add_hours
 
-    # Optional status update
-    if update.status is not None:
-        game.status = update.status
-
-    # Update estimated game length
+    # estimated length changes
     if update.estimated_hours is not None:
         if update.estimated_hours <= 0:
             raise HTTPException(status_code=400, detail="estimated_hours must be > 0")
         game.estimated_hours = update.estimated_hours
 
-    # Optional metadata edits
-    if update.cover_art_url is not None:
-        game.cover_art_url = update.cover_art_url
+    # set now playing
+    if update.is_current is True:
+        make_now_playing(session, user_id, game)
 
-    if update.title is not None:
-        game.title = update.title
-
-    if update.platform is not None:
-        game.platform = update.platform
-
-
-    # Recompute completion after any hours change
+    # always recalc + update timestamp
     recalc_completion(game)
+    game.updated_at = datetime.now(timezone.utc)
+
+    session.add(game)
+    session.commit()
+    session.refresh(game)
     return game
 
-@app.post("/games", response_model=Game)
-def create_game(payload: GameCreate):
-    new_game = Game(
-        id=next_game_id(),
-        title=payload.title,
-        platform=payload.platform,
-        status=payload.status,
-        hours_played=payload.hours_played,
-        estimated_hours=payload.estimated_hours,
-        cover_art_url=payload.cover_art_url,
-        is_current=False,
-        started_on=None,
-        last_now_playing_at=None,
-        completion_percent=0,
-    )
 
-    recalc_completion(new_game)
-    GAMES.append(new_game)
-    return new_game
-
+# ✅ DELETE only works on your own games
 @app.delete("/games/{game_id}")
-def delete_game(game_id: int):
-    idx = next((i for i, g in enumerate(GAMES) if g.id == game_id), None)
-    if idx is None:
+def delete_game(
+    game_id: int,
+    user_id: str = Depends(get_user_id),
+    session: Session = Depends(get_session),
+):
+    game = session.exec(
+        select(GameDB).where(GameDB.id == game_id, GameDB.owner_id == user_id)
+    ).first()
+
+    if not game:
         raise HTTPException(status_code=404, detail="Game not found")
 
-    was_current = GAMES[idx].is_current
-    del GAMES[idx]
+    was_current = game.is_current
 
-    # If we deleted the current game, pick a new one if any remain
-    if was_current and GAMES:
-        # choose the most recently "now playing" among remaining, else first game
-        candidate = max(
-            GAMES,
-            key=lambda g: g.last_now_playing_at.timestamp() if g.last_now_playing_at else 0
-        )
-        set_current_game(candidate.id)
+    session.delete(game)
+    session.commit()
+
+    # If we deleted the current game, choose the most recent remaining one as current
+    if was_current:
+        replacement = session.exec(
+            select(GameDB)
+            .where(GameDB.owner_id == user_id)
+            .order_by(GameDB.last_now_playing_at.desc().nullslast(), GameDB.id.desc())
+        ).first()
+
+        if replacement:
+            make_now_playing(session, user_id, replacement)
+            session.commit()
 
     return {"deleted": game_id}

@@ -66,6 +66,11 @@ Create an account and test:
 - Update hours / estimated length (completion % recalculates automatically)
 - Confirm per-user data isolation by using a second account
 
+Log in with the demo account to test the features of the app:
+email:
+test@gmail.com
+password:
+123456
 ---
 
 ## Roadmap

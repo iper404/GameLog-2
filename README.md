@@ -60,17 +60,21 @@ The app is multi-user: each user only sees and can edit/delete their own games.
 
 **Try it here:** https://gamelog-2.vercel.app/
 
+Log in with the demo account to test the features of the app:
+
+email:
+test@gmail.com
+
+password:
+123456
+
+Or:
+
 Create an account and test:
 - Add games
 - Set Now Playing
 - Update hours / estimated length (completion % recalculates automatically)
 - Confirm per-user data isolation by using a second account
-
-Log in with the demo account to test the features of the app:
-email:
-test@gmail.com
-password:
-123456
 ---
 
 ## Roadmap
